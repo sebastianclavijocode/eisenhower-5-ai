@@ -1,48 +1,44 @@
-# Eisenhower 5 + IA — Matriz editable
+# Eisenhower 5 + IA — Pipeline editable
 
-App de Streamlit para convertir una lista de texto en tareas, etiquetarlas una por una y visualizar las 5 zonas en un solo tablero.
+App de Streamlit para pegar tareas en bloque, clasificarlas en cinco zonas, arrastrarlas entre zonas como en un pipeline, completar tareas y conservar un historial.
 
-## Cómo funciona
+## Funciones
 
-1. **Pega todo el texto** en la caja principal; soporta viñetas, números, saltos de línea y varios enunciados.
-2. Pulsa **Separar texto en tareas**. La extracción inicial se hace mediante reglas locales, sin API ni pago.
-3. **Etiqueta cada tarea** en `Do Now`, `Schedule`, `Delegate to Human`, `Delegate to AI` o `Eliminate`. La nota es opcional.
-4. La **matriz se actualiza en tiempo real** al cambiar las etiquetas.
-5. Si una tarea agrupa varias acciones, usa **Dividir esta tarea en subtareas**. Hay propuesta automática para listas claras del tipo `Flujo: pagos, recordatorios y seguimiento`; también puedes escribir las subtareas manualmente.
+- **Pega tareas masivas en cualquier momento.** Las nuevas quedan en **Sin clasificar**; las existentes se conservan. Evita duplicados textuales.
+- **Clasifica** cada tarea como Do Now, Schedule, Delegate to Human, Delegate to AI o Eliminate.
+- **Arrastra y suelta** tarjetas entre las cinco zonas y reordena las que están en una misma zona (con el componente `streamlit-dnd`).
+- **Mover alternativo:** cada tarjeta tiene **↔ Mover**, por si el navegador no permite arrastrar.
+- **Completar:** pulsar **✓ Hecha** saca la tarea de la matriz y la guarda en **Completadas**, con opción de **Restaurar**.
+- **Mini tags y notas:** desde **✏️ Editar** puedes incluir etiquetas como `👥 Responsable operativo | 💳 Compra / acceso` y notas.
+- **Subtareas:** en la vista **Clasificar**, puedes dividir una tarea en subtareas editables.
+- **Exportar / importar JSON** para conservar el trabajo y recuperar versiones anteriores.
 
-La app empieza sin tareas; el botón **Usar mis tareas del ejemplo** pega la lista original para probarla.
+## Subir a GitHub y actualizar Streamlit
 
-## Proyecto
+Reemplaza **`app.py`**, **`task_parser.py`** y **`requirements.txt`** en la raíz de tu repositorio `eisenhower-5-ai`. Asegúrate de que los nombres no tengan sufijos como `(1)`.
+
+Archivos:
 
 ```text
-app.py
-requirements.txt
-task_parser.py
-.streamlit/config.toml
-README.md
+eisenhower-5-ai/
+├── app.py
+├── task_parser.py
+├── requirements.txt
+└── README.md
 ```
 
-## Ejecución local
+Haz **Commit changes**. Si tu aplicación de Streamlit Community Cloud apunta a `app.py`, debería actualizarse automáticamente después del commit.
+
+## Ejecutar localmente
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Actualizar tu app de Streamlit Cloud
+## Alcances y limitaciones
 
-En tu repositorio `eisenhower-5-ai`, **reemplaza `app.py`** y **sube `task_parser.py`** junto a él. Actualiza `requirements.txt` si quieres. Conserva el despliegue apuntando a `app.py`, rama `main`.
-
-Streamlit Cloud desplegará los cambios del repositorio automáticamente. Si hay problemas de caché, usa `Manage app` → `Reboot app` y actualiza la página.
-
-## Guardado de datos
-
-La app usa `st.session_state`: **no guarda automáticamente los cambios entre sesiones, dispositivos o reinicios**. Antes de cerrar, usa **Descargar tareas.json**. Al regresar, abre el archivo descargado, copia su contenido y pégalo en **Recuperar tareas desde JSON** en la barra lateral. Esta alternativa evita el error de carga de archivos del navegador. Un equipo multiusuario necesita una base de datos externa para compartir y persistir tareas.
-
-## Nota sobre la IA
-
-`Delegate to AI` es **una etiqueta organizativa**, no una conexión real a ChatGPT ni una automatización activa. El desglose automático disponible usa reglas simples y puede requerir correcciones, especialmente si pegas un párrafo largo sin viñetas.
-
-## Privacidad y seguridad
-
-Los textos escritos se renderizan en la matriz con escape de HTML. Evita cargar claves de acceso, información de pago o datos personales sensibles en una app pública. El JSON exportado contendrá tus textos.
+- El desglose automático de enumeraciones usa reglas; **no llama a un modelo de IA** ni decide la prioridad por ti.
+- La sesión de Streamlit **no es almacenamiento permanente**. Descarga `tareas.json` antes de cerrar y vuelve a importarlo después, o conecta una base de datos.
+- Arrastrar y soltar requiere `streamlit-dnd==0.2.0`. Para mayor compatibilidad el archivo `requirements.txt` usa `streamlit==1.63.0`, versión dentro del rango probado por el autor del componente. Cada tarjeta incluye **↔ Mover** como alternativa si el navegador no permite arrastrar.
+- El botón **✓ Hecha** no borra la tarea. Solo la archiva en el historial, desde donde se puede restaurar.

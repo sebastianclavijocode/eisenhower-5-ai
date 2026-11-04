@@ -1,21 +1,48 @@
-"""Eisenhower + IA: pegar → desglosar → etiquetar → ver matriz (5 zonas)."""
+"""Eisenhower 5 + IA — tareas masivas, etiquetas, Kanban y completadas."""
 from __future__ import annotations
 
 import html
 import json
+from datetime import datetime
 
 import streamlit as st
 
-from task_parser import ZONES, extract_tasks, new_task, normalize_import, proposed_subtasks
+from task_parser import ZONES, extract_tasks, new_task, normalize_import, parse_tags, proposed_subtasks
+
+try:
+    from streamlit_dnd import dnd, apply_move
+except ImportError:
+    dnd = None
+    apply_move = None
 
 st.set_page_config(
-    page_title="Eisenhower 5 + IA | Matriz editable",
+    page_title="Eisenhower 5 + IA",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-SAMPLE = """Automatizaciones e inteligencia artificial
+ACTIVE_ZONES = list(ZONES)
+MATRIX_ZONES = list(ZONES[1:])
+DONE = "Completadas"
+ALL_ZONES = ACTIVE_ZONES + [DONE]
+ZONE_KEYS = {
+    "Sin clasificar": "zone_inbox",
+    "Do Now": "zone_now",
+    "Schedule": "zone_schedule",
+    "Delegate to Human": "zone_human",
+    "Delegate to AI": "zone_ai",
+    "Eliminate": "zone_eliminate",
+}
+META = {
+    "Do Now": ("⚡", "Urgente · Importante", "#F5B9BF"),
+    "Schedule": ("📅", "Importante · No urgente", "#BFE7F5"),
+    "Delegate to Human": ("👥", "Asignar a una persona", "#F9E6A3"),
+    "Delegate to AI": ("🤖", "Asignar a IA / automatización", "#D9CAFF"),
+    "Eliminate": ("🗑️", "Eliminar o reducir", "#E9EAED"),
+}
+
+EXAMPLE = """Automatizaciones e inteligencia artificial
 Schedule
 - Corregir el formato de los números telefónicos para que las llamadas automatizadas lleguen correctamente.
 - Ajustar los flujos del webinar: enlaces de pago después de la grabación, recordatorios 10 minutos antes y mensajes de seguimiento.
@@ -33,291 +60,376 @@ No importante
 - Indicar a Diana que organice los videos por mes, promoción y carrera.
 - Localizar el video anterior de maestros y evaluar su reutilización."""
 
-META = {
-    "Do Now": ("⚡", "Urgente + importante", "now"),
-    "Schedule": ("📅", "Importante + no urgente", "schedule"),
-    "Delegate to Human": ("👥", "Delegar a una persona", "human"),
-    "Delegate to AI": ("🤖", "Delegar tareas aptas para IA", "ai"),
-    "Eliminate": ("🗑️", "Reducir o descartar", "eliminate"),
-}
+CSS = """
+<style>
+  :root { --board:#303B60; --muted:#dce5fb; }
+  .block-container { max-width:1530px; padding-top:1.2rem; padding-bottom:2rem; }
+  .eai-intro { display:flex; align-items:center; gap:10px; margin-bottom:5px; }
+  .eai-intro strong { font-size:27px; letter-spacing:-.5px; }
+  .eai-lead { opacity:.78; font-size:14px; margin-bottom:10px; }
+  .st-key-matrix_shell {background:var(--board);padding:18px 18px 20px;border-radius:21px;box-shadow:0 14px 30px #0002;}
+  .st-key-matrix_shell .st-key-zone_now,
+  .st-key-matrix_shell .st-key-zone_schedule,
+  .st-key-matrix_shell .st-key-zone_human,
+  .st-key-matrix_shell .st-key-zone_ai,
+  .st-key-matrix_shell .st-key-zone_eliminate {
+    background:#ffffff10;border-radius:16px;border:1px solid #ffffff30;
+    padding:12px 12px 10px;min-width:0;
+  }
+  .st-key-matrix_shell .eai-zone-head { font-size:17px; text-align:center; font-weight:800; color:white; }
+  .st-key-matrix_shell .eai-zone-sub { font-size:11px; text-align:center; color:var(--muted); padding-bottom:9px; }
+  .st-key-matrix_shell [class*='st-key-card_'],
+  .st-key-zone_inbox [class*='st-key-card_'] {
+    border-radius:14px!important;border:1px solid #00000012!important;
+    padding:10px 11px 8px!important;margin-bottom:9px;
+    box-shadow:0 7px 13px #07163127;
+    color:#1a2635!important;
+  }
+  .st-key-matrix_shell .st-key-zone_now [class*='st-key-card_'] {background:#F5B9BF;}
+  .st-key-matrix_shell .st-key-zone_schedule [class*='st-key-card_'] {background:#BFE7F5;}
+  .st-key-matrix_shell .st-key-zone_human [class*='st-key-card_'] {background:#F9E6A3;}
+  .st-key-matrix_shell .st-key-zone_ai [class*='st-key-card_'] {background:#D9CAFF;}
+  .st-key-matrix_shell .st-key-zone_eliminate [class*='st-key-card_'] {background:#E9EAED;}
+  .st-key-zone_inbox [class*='st-key-card_'] {background:#f5f4ef;}
+  .eai-card-title{font-size:12.5px;line-height:1.38;font-weight:700;color:#243044;overflow-wrap:anywhere;}
+  .eai-card-note{font-size:11px;color:#3c4655;margin:5px 0 3px;overflow-wrap:anywhere;}
+  .eai-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;}
+  .eai-chip{display:inline-flex;align-items:center;border-radius:100px;background:#ffffffb0;color:#263045;font-size:10px;font-weight:700;padding:3px 8px;max-width:100%;overflow-wrap:anywhere;}
+  .eai-zone-empty{font-size:12px;color:#dce3fa;text-align:center;border:1px dashed #ffffff50;border-radius:10px;padding:15px 6px;}
+  .eai-zone-number{border-radius:20px;padding:2px 8px;background:#ffffff34;color:white;font-size:12px;margin-left:4px}
+  .eai-mini {font-size:12px;color:#c1cae2;}
+  .st-key-matrix_shell [class*='st-key-card_'] button,
+  .st-key-zone_inbox [class*='st-key-card_'] button {font-size:11px!important;padding:3px 7px!important;min-height:28px!important;}
+  .st-key-matrix_shell [class*='st-key-card_'] [data-testid='stHorizontalBlock'] {gap:5px;}
+  .st-key-matrix_shell [class*='st-key-card_'] [data-testid='stVerticalBlock'] {gap:4px;}
+  .st-key-zone_inbox [class*='st-key-card_'] [data-testid='stVerticalBlock']{gap:4px;}
+  .eai-status{font-size:12px;opacity:.72;}
+  .eai-help{font-size:12px;opacity:.75;margin-top:3px;}
+</style>
+"""
+st.html(CSS)
 
-if "tasks" not in st.session_state:
-    st.session_state.tasks = []
-if "paste_text" not in st.session_state:
-    st.session_state.paste_text = ""
-
-
-def find_task(task_id: str) -> dict | None:
-    return next((item for item in st.session_state.tasks if item["id"] == task_id), None)
-
-
-def update_field(task_id: str, field: str, widget_key: str) -> None:
-    item = find_task(task_id)
-    if item is not None:
-        item[field] = st.session_state[widget_key]
-
-
-def use_example() -> None:
-    st.session_state.paste_text = SAMPLE
-
-
-def sync_focus() -> None:
-    st.session_state.focus_target = st.session_state.focus_select
-
-
-def short(text: str, limit: int = 74) -> str:
-    return text if len(text) <= limit else text[:limit - 1] + "…"
-
-
-def matrix_markup(tasks: list[dict]) -> str:
-    css = """
-    <style>
-      .eai-board{background:#303b60;border-radius:22px;padding:25px 23px 26px;color:#fff;font-family:Inter,ui-sans-serif,Arial,sans-serif;box-shadow:0 12px 35px #0b122840}
-      .eai-heading{text-align:center;font-size:27px;font-weight:800;margin:0 0 5px}
-      .eai-subheading{text-align:center;color:#d8e0f3;font-size:13px;margin:0 0 22px}
-      .eai-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
-      .eai-zone{grid-column:span 3;min-width:0;background:#ffffff0c;border:1px solid #ffffff22;border-radius:17px;padding:15px 14px;min-height:294px}
-      .eai-zone.bottom{grid-column:span 2;min-height:274px}
-      .eai-zhead{text-align:center;font-size:16px;font-weight:800;margin-bottom:4px;letter-spacing:.1px}
-      .eai-caption{text-align:center;color:#dee5fa;font-size:11px;min-height:18px;margin-bottom:12px}
-      .eai-count{background:#ffffff2b;border-radius:20px;padding:2px 8px;margin-left:5px;font-size:11px;white-space:nowrap}
-      .eai-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;max-height:262px;overflow-y:auto;scrollbar-width:thin;padding:2px 2px 5px}
-      .eai-zone.bottom .eai-cards{grid-template-columns:1fr;max-height:249px}
-      .eai-card{border-radius:12px;color:#1b2434;padding:12px 12px 10px;min-height:76px;box-shadow:0 5px 12px #09132328;font-size:12px;line-height:1.4;overflow-wrap:anywhere}
-      .eai-card-title{font-weight:700}
-      .eai-note{margin-top:8px;padding-top:7px;border-top:1px solid #0002;font-size:11px}
-      .now .eai-card{background:#f4b7b9}.schedule .eai-card{background:#bfe8f7}.human .eai-card{background:#ffe99a}.ai .eai-card{background:#d8caff}.eliminate .eai-card{background:#ececec}
-      .eai-empty{border:1px dashed #ffffff5a;border-radius:12px;padding:20px;color:#dce3f5;text-align:center;font-size:12px}
-      .eai-footer{font-size:11px;color:#e1e6f5b8;margin-top:13px;text-align:center}
-      @media(max-width:900px){.eai-zone{grid-column:span 6}.eai-zone.bottom{grid-column:span 6}.eai-grid{gap:12px}.eai-board{padding:16px}.eai-cards,.eai-zone.bottom .eai-cards{grid-template-columns:repeat(2,minmax(0,1fr));max-height:220px}}
-      @media(max-width:520px){.eai-cards,.eai-zone.bottom .eai-cards{grid-template-columns:1fr}}
-    </style>
-    """
-    html_parts = [
-        css,
-        '<section class="eai-board">',
-        '<div class="eai-heading">Matriz Eisenhower + IA</div>',
-        '<div class="eai-subheading">Cinco zonas, todas visibles en un solo tablero · Clasificación personalizada</div>',
-        '<div class="eai-grid">',
-    ]
-    for key, (icon, desc, class_name) in META.items():
-        elements = [task for task in tasks if task["zone"] == key]
-        bottom_class = " bottom" if key not in ("Do Now", "Schedule") else ""
-        html_parts.append(f'<section class="eai-zone {class_name}{bottom_class}">')
-        html_parts.append(f'<div class="eai-zhead">{icon} {html.escape(key.upper())} <span class="eai-count">{len(elements)}</span></div>')
-        html_parts.append(f'<div class="eai-caption">{html.escape(desc)}</div><div class="eai-cards">')
-        if not elements:
-            html_parts.append('<div class="eai-empty">Sin tareas asignadas</div>')
-        for task in elements:
-            title = html.escape(task["text"])
-            note = html.escape(task.get("notes", ""))
-            html_parts.append('<div class="eai-card">')
-            html_parts.append(f'<div class="eai-card-title">{title}</div>')
-            if note:
-                html_parts.append(f'<div class="eai-note">📝 {note}</div>')
-            html_parts.append('</div>')
-        html_parts.append('</div></section>')
-    html_parts.extend([
-        '</div>',
-        '<div class="eai-footer">Las notas son opcionales. “Delegate to AI” indica a quién asignar la tarea, no que ya esté automatizada.</div>',
-        '</section>',
-    ])
-    return "".join(html_parts)
+if "board" not in st.session_state:
+    st.session_state.board = {zone: [] for zone in ALL_ZONES}
+if "bulk_input" not in st.session_state:
+    st.session_state.bulk_input = ""
+if "flash" not in st.session_state:
+    st.session_state.flash = ""
 
 
-# --------- Cabecera ---------
+def all_tasks() -> list[dict]:
+    return [task for tasks in st.session_state.board.values() for task in tasks]
+
+
+def find_task(task_id: str) -> tuple[str | None, dict | None]:
+    for zone, items in st.session_state.board.items():
+        for task in items:
+            if task["id"] == task_id:
+                return zone, task
+    return None, None
+
+
+def move_task(task_id: str, destination: str) -> None:
+    if destination not in ALL_ZONES:
+        return
+    origin, task = find_task(task_id)
+    if not task or origin is None or origin == destination:
+        return
+    st.session_state.board[origin].remove(task)
+    if destination == DONE:
+        task["last_zone"] = origin if origin != DONE else task.get("last_zone", "Sin clasificar")
+        task["completed"] = True
+        task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    else:
+        task["completed"] = False
+        task["completed_at"] = ""
+        task["zone"] = destination
+    st.session_state.board[destination].append(task)
+
+
+def complete_task(task_id: str) -> None:
+    move_task(task_id, DONE)
+
+
+def restore_task(task_id: str) -> None:
+    _, task = find_task(task_id)
+    if task:
+        move_task(task_id, task.get("last_zone", "Sin clasificar"))
+
+
+def remove_task(task_id: str) -> None:
+    zone, task = find_task(task_id)
+    if zone and task:
+        st.session_state.board[zone].remove(task)
+
+
+def save_task(task_id: str, text: str, tags: str, note: str, destination: str) -> None:
+    _, task = find_task(task_id)
+    if task and text.strip():
+        task["text"] = text.strip()
+        task["tags"] = parse_tags(tags)
+        task["notes"] = note.strip()
+        move_task(task_id, destination)
+
+
+def fill_example() -> None:
+    st.session_state.bulk_input = EXAMPLE
+
+
+def add_bulk() -> None:
+    text = st.session_state.get("bulk_input", "")
+    split = st.session_state.get("bulk_split", False)
+    extracted = extract_tasks(text, expand_lists=split)
+    if not extracted:
+        st.session_state.flash = "Pega al menos una tarea (una por línea o una lista con viñetas)."
+        return
+    existing = {t["text"].strip().casefold() for t in all_tasks()}
+    added = 0
+    for sentence in extracted:
+        if sentence.strip().casefold() in existing:
+            continue
+        task = new_task(sentence)
+        st.session_state.board["Sin clasificar"].append(task)
+        existing.add(sentence.strip().casefold())
+        added += 1
+    st.session_state.bulk_input = ""  # en callback: seguro para el text_area
+    st.session_state.flash = f"Se agregaron {added} tareas nuevas a Sin clasificar. Las repetidas se omitieron."
+
+
+def import_json() -> None:
+    content = st.session_state.get("json_input", "")
+    try:
+        imported = normalize_import(json.loads(content))
+    except (ValueError, json.JSONDecodeError) as exc:
+        st.session_state.flash = f"No fue posible importar: {exc}"
+        return
+    st.session_state.board = {zone: [] for zone in ALL_ZONES}
+    for task in imported:
+        group = DONE if task.get("completed", False) else task["zone"]
+        st.session_state.board[group].append(task)
+    st.session_state.flash = f"Se recuperaron {len(imported)} tareas."
+
+
+def render_card(task: dict, zone: str) -> None:
+    title = html.escape(task["text"])
+    note = html.escape(task.get("notes", ""))
+    chips = "".join(f'<span class="eai-chip">{html.escape(t)}</span>' for t in task.get("tags", []))
+    with st.container(key=f"card_{task['id']}", border=True):
+        st.html(f'<div class="eai-card-title">{title}</div>'
+                + (f'<div class="eai-chips">{chips}</div>' if chips else "")
+                + (f'<div class="eai-card-note">📝 {note}</div>' if note else ""))
+        col_complete, col_move, col_edit = st.columns(3, gap="small")
+        if col_complete.button("✓ Hecha", key=f"done_{task['id']}", use_container_width=True):
+            complete_task(task["id"])
+            st.rerun()
+        with col_move.popover("↔ Mover", use_container_width=True):
+            destination = st.selectbox(
+                "Mover a la zona",
+                ACTIVE_ZONES,
+                index=ACTIVE_ZONES.index(zone),
+                key=f"move_dest_{task['id']}_{ZONE_KEYS[zone]}",
+            )
+            if st.button("Aplicar cambio", key=f"move_apply_{task['id']}", use_container_width=True):
+                move_task(task["id"], destination)
+                st.rerun()
+        with col_edit.popover("✏️ Editar", use_container_width=True):
+            with st.form(key=f"edit_form_{task['id']}"):
+                edited_text = st.text_area("Tarea", value=task["text"], height=100)
+                edited_tags = st.text_input("Mini tags (separados por |)", value=" | ".join(task.get("tags", [])),
+                                            placeholder="👥 Diana | 📁 Organización")
+                edited_note = st.text_area("Nota opcional", value=task.get("notes", ""), height=80)
+                edited_zone = st.selectbox("Zona", ACTIVE_ZONES, index=ACTIVE_ZONES.index(zone))
+                if st.form_submit_button("Guardar cambios", type="primary", use_container_width=True):
+                    if edited_text.strip():
+                        save_task(task["id"], edited_text, edited_tags, edited_note, edited_zone)
+                        st.rerun()
+                    else:
+                        st.warning("La descripción no puede estar vacía.")
+
+
+def render_zone(zone: str) -> None:
+    icon, hint, _ = META[zone]
+    zone_id = ZONE_KEYS[zone]
+    with st.container(key=zone_id, border=True, height=306):
+        st.html(f'<div class="eai-zone-head">{icon} {html.escape(zone.upper())} '
+                f'<span class="eai-zone-number">{len(st.session_state.board[zone])}</span></div>'
+                f'<div class="eai-zone-sub">{html.escape(hint)}</div>')
+        if not st.session_state.board[zone]:
+            st.html('<div class="eai-zone-empty">Arrastra una tarjeta aquí</div>')
+        for task in st.session_state.board[zone]:
+            render_card(task, zone)
+
+
 st.title("🧠 Automatizaciones e Inteligencia Artificial")
-st.caption("Flujo: **1. Pegar tareas → 2. Separar → 3. Etiquetar una por una → 4. Matriz de cinco zonas en vivo.**")
+st.caption("Pega tareas en bloque · Etiquétalas · Muévelas entre cinco zonas · Marca las completadas")
 
 with st.sidebar:
-    st.header("📁 Guardar y recuperar")
-    st.caption("Esta versión guarda cambios durante la sesión. Para conservarlos entre visitas, exporta JSON.")
-    export = json.dumps(st.session_state.tasks, ensure_ascii=False, indent=2)
-    st.download_button(
-        "⬇️ Descargar tareas.json",
-        export,
-        file_name="tareas_eisenhower_ia.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-    with st.expander("📥 Recuperar tareas desde JSON"):
-        st.caption("Abre el JSON que descargaste, copia su contenido y pégalo aquí. Se evita la carga de archivos que fallaba en tu navegador.")
-        pasted_json = st.text_area("Contenido del archivo JSON", height=110, key="import_json_text")
-        if st.button("Restaurar tareas del JSON", disabled=not pasted_json.strip(), use_container_width=True):
-            try:
-                imported = normalize_import(json.loads(pasted_json))
-                st.session_state.tasks = imported
-                st.session_state.pop("focus_target", None)
-                st.success(f"Se importaron {len(imported)} tareas.")
-                st.rerun()
-            except (ValueError, json.JSONDecodeError) as exc:
-                st.error(f"No se pudo importar el JSON: {exc}")
+    st.header("💾 Guardar y recuperar")
+    st.caption("Tus cambios viven en esta sesión. Descarga un JSON para no perderlos entre visitas.")
+    snapshot = []
+    for zone, rows in st.session_state.board.items():
+        for task in rows:
+            record = dict(task)
+            record["completed"] = zone == DONE
+            if zone != DONE:
+                record["zone"] = zone
+            snapshot.append(record)
+    st.download_button("⬇️ Descargar tareas.json", json.dumps(snapshot, ensure_ascii=False, indent=2),
+                       file_name="eisenhower_tareas.json", mime="application/json", use_container_width=True)
+    with st.expander("📥 Restaurar desde JSON"):
+        st.text_area("Pega aquí el contenido del archivo JSON", key="json_input", height=160)
+        st.button("Restaurar tareas", on_click=import_json, use_container_width=True, type="primary")
     st.divider()
-    st.info("**¿Qué significa cada etiqueta?**\n\n" 
-            "**Do Now:** resolver tú ahora.\n\n"
-            "**Schedule:** poner fecha.\n\n"
-            "**Delegate to Human:** asignar a otra persona.\n\n"
-            "**Delegate to AI:** pasar a una automatización o herramienta de IA.\n\n"
-            "**Eliminate:** evitar lo que no aporta valor.")
+    st.markdown("**Mini tags**\n\n" "Puedes agregar etiquetas como `👥 Miriam`, `💳 Compra / acceso` o `🤖 IA`. "
+                "Sepáralas con `|`. Las etiquetas explican una tarea: **la zona** define su prioridad o destino.")
+    st.caption("Arrastrar tarjetas usa el componente comunitario streamlit-dnd. Si no funciona en tu navegador, usa ↔ Mover.")
 
-# --------- Paso 1 ---------
-st.subheader("1 · Pega la lista completa")
-st.write("Pega un párrafo, varias líneas o una lista con viñetas. No hace falta que clasifiques nada todavía.")
-st.text_area(
-    "Todas tus tareas",
-    key="paste_text",
-    height=180,
-    placeholder="Ejemplo:\n- Crear enlace de pago\n- Corregir números telefónicos\n- Ajustar los flujos del webinar: enlace de pago, recordatorios y seguimiento",
-    label_visibility="collapsed",
-)
-with st.expander("⚙️ Opciones al separar el texto", expanded=False):
-    expand_lists = st.checkbox(
-        "Separar enumeraciones después de dos puntos en subtareas",
-        help="Por ejemplo, 'Webinar: enlace de pago, recordatorios y seguimiento' se convierte en tres tareas editables. No utiliza IA externa.",
-    )
-    paste_mode = st.radio("Al procesar", ["Reemplazar tareas actuales", "Agregar a las existentes"], horizontal=True)
+with st.expander("➕ Pegar nuevas tareas masivas", expanded=not bool(all_tasks())):
+    st.write("Pega toda la lista. Las tareas nuevas entran a **Sin clasificar**; las que ya existen se conservan.")
+    st.text_area("Lista de tareas", key="bulk_input", height=150,
+                 placeholder="- Corregir números telefónicos\n- Crear enlace de pago en Stripe\n- Programar recordatorios del webinar")
+    st.checkbox("Dividir enumeraciones claras en subtareas (sin usar IA externa)", key="bulk_split")
+    bc1, bc2 = st.columns([2, 1])
+    bc1.button("➕ Agregar todas las tareas", key="bulk_add", type="primary", on_click=add_bulk,
+               use_container_width=True)
+    bc2.button("📋 Usar texto de ejemplo", on_click=fill_example, use_container_width=True)
 
-btn1, btn2 = st.columns([1, 1])
-if btn1.button("✂️ Separar texto en tareas", type="primary", use_container_width=True):
-    extracted = extract_tasks(st.session_state.paste_text, expand_lists=expand_lists)
-    if not extracted:
-        st.warning("Pega al menos una tarea para comenzar.")
+if st.session_state.flash:
+    st.info(st.session_state.flash)
+    st.session_state.flash = ""
+
+active_count = sum(len(st.session_state.board[z]) for z in ACTIVE_ZONES)
+done_count = len(st.session_state.board[DONE])
+pending_count = len(st.session_state.board["Sin clasificar"])
+total = active_count + done_count
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Activas", active_count)
+k2.metric("Sin clasificar", pending_count)
+k3.metric("Completadas", done_count)
+k4.metric("Avance", f"{(100*done_count/total):.0f}%" if total else "0%")
+
+view = st.segmented_control("Vista", ["🧩 Matriz", "🏷️ Clasificar", "✅ Completadas"],
+                            default="🧩 Matriz", key="view", label_visibility="collapsed")
+
+if view == "🏷️ Clasificar":
+    st.subheader("🏷️ Etiqueta tus tareas")
+    st.caption("Selecciona una zona para cada tarea. El cambio es inmediato y la tarea aparecerá en ese cuadro de la matriz.")
+    active = [t for z in ACTIVE_ZONES for t in st.session_state.board[z]]
+    if not active:
+        st.info("No hay tareas activas. Agrégalas desde la sección de tareas masivas.")
     else:
-        prepared = [new_task(t) for t in extracted]
-        if paste_mode.startswith("Reemplazar"):
-            st.session_state.tasks = prepared
-        else:
-            st.session_state.tasks.extend(prepared)
-        st.session_state.pop("focus_target", None)
-        st.toast(f"Se detectaron {len(prepared)} tareas. Ahora puedes etiquetarlas.")
-        st.rerun()
-btn2.button("📋 Usar mis tareas del ejemplo", use_container_width=True, on_click=use_example)
+        show_only_pending = st.checkbox("Solo mostrar sin clasificar", value=True)
+        selected = [t for t in active if t["zone"] == "Sin clasificar"] if show_only_pending else active
+        if not selected:
+            st.success("Todas tus tareas tienen una zona. Desactiva el filtro para verlas todas.")
+        for task in selected:
+            current_zone, _ = find_task(task["id"])
+            with st.container(border=True):
+                left, right = st.columns([2.1, 1])
+                left.write(task["text"])
+                key = f"classify_{task['id']}"
+                st.session_state[key] = current_zone
+                def _on_classify(tid=task["id"], widget_key=key):
+                    move_task(tid, st.session_state[widget_key])
+                right.selectbox("Zona", ACTIVE_ZONES,
+                                index=ACTIVE_ZONES.index(current_zone),
+                                key=key, on_change=_on_classify)
+                with st.expander("✏️ Editar texto, mini tags o dividir en subtareas"):
+                    with st.form(key=f"class_edit_{task['id']}"):
+                        txt = st.text_area("Texto", value=task["text"])
+                        mini = st.text_input("Mini tags (separar con |)", value=" | ".join(task.get("tags", [])))
+                        note = st.text_input("Nota opcional", value=task.get("notes", ""))
+                        if st.form_submit_button("Guardar", type="primary"):
+                            save_task(task["id"], txt, mini, note, current_zone)
+                            st.rerun()
+                    suggested = proposed_subtasks(task["text"])
+                    if suggested:
+                        st.caption("Subtareas sugeridas por enumeración (puedes editarlas):")
+                    pieces = st.text_area("Una subtarea por línea", value="\n".join(suggested),
+                                         key=f"split_{task['id']}", height=100,
+                                         placeholder="Subtarea 1\nSubtarea 2")
+                    if st.button("Crear subtareas y reemplazar la tarea principal", key=f"split_submit_{task['id']}"):
+                        parts = extract_tasks(pieces)
+                        if len(parts) < 2:
+                            st.warning("Escribe al menos dos subtareas.")
+                        else:
+                            idx = st.session_state.board[current_zone].index(task)
+                            st.session_state.board[current_zone][idx:idx + 1] = [
+                                new_task(s, zone=current_zone, notes=task.get("notes", ""),
+                                         tags=task.get("tags", [])) for s in parts
+                            ]
+                            st.rerun()
 
-st.divider()
+elif view == "✅ Completadas":
+    st.subheader(f"✅ Completadas ({done_count})")
+    st.caption("Cuando marcas una tarea como hecha, sale de la matriz y queda aquí. Puedes restaurarla a su zona anterior.")
+    if not done_count:
+        st.info("Todavía no has completado tareas.")
+    for task in st.session_state.board[DONE]:
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1])
+            c1.markdown(f"**{task['text']}**")
+            chips = "".join(f'<span class="eai-chip">{html.escape(tag)}</span>' for tag in task.get("tags", []))
+            if chips:
+                c1.html(f'<div class="eai-chips">{chips}</div>')
+            if task.get("notes"):
+                c1.caption(f"📝 {task['notes']}")
+            c1.caption(f"Terminada: {task.get('completed_at') or 'Sin fecha'} · Antes: {task.get('last_zone', 'Sin clasificar')}")
+            if c2.button("↩ Restaurar", key=f"restore_{task['id']}", use_container_width=True):
+                restore_task(task["id"])
+                st.rerun()
 
-# --------- Paso 2 ---------
-st.subheader("2 · Revisa y etiqueta cada tarea")
-total = len(st.session_state.tasks)
-classified = sum(item["zone"] != "Sin clasificar" for item in st.session_state.tasks)
-a, b, c = st.columns(3)
-a.metric("Tareas detectadas", total)
-b.metric("Clasificadas", classified)
-c.metric("Pendientes de etiqueta", total - classified)
-if total:
-    st.progress(classified / total)
-
-if not total:
-    st.info("Tu lista todavía está vacía. Pega tareas arriba y pulsa **Separar texto en tareas**.")
 else:
-    show_filter = st.radio("Mostrar", ["Sin clasificar", "Todas las tareas"], horizontal=True)
-    visible = [task for task in st.session_state.tasks if task["zone"] == "Sin clasificar"] if show_filter == "Sin clasificar" else st.session_state.tasks
+    st.markdown("#### 🧩 Matriz de 5 zonas — arrastra las tarjetas como en un pipeline")
+    st.caption("Arrastra por la esquina de cada tarjeta para cambiarla de cuadro. También puedes usar ↔ Mover o ✓ Hecha.")
+    draggable_keys: list[str] = []
+    if pending_count:
+        with st.expander(f"📥 Bandeja sin clasificar · {pending_count} tareas (puedes arrastrarlas a la matriz)", expanded=True):
+            with st.container(key=ZONE_KEYS["Sin clasificar"], border=True, height=235):
+                draggable_keys.append(ZONE_KEYS["Sin clasificar"])
+                for task in st.session_state.board["Sin clasificar"]:
+                    render_card(task, "Sin clasificar")
+    with st.container(key="matrix_shell", border=False):
+        upper_left, upper_right = st.columns(2, gap="small")
+        with upper_left:
+            render_zone("Do Now")
+        with upper_right:
+            render_zone("Schedule")
+        lower_left, lower_mid, lower_right = st.columns(3, gap="small")
+        with lower_left:
+            render_zone("Delegate to Human")
+        with lower_mid:
+            render_zone("Delegate to AI")
+        with lower_right:
+            render_zone("Eliminate")
+    draggable_keys.extend(ZONE_KEYS[zone] for zone in MATRIX_ZONES)
 
-    if not visible:
-        st.success("🎉 Todas las tareas tienen una zona. Usa 'Todas las tareas' para revisarlas o editarlas.")
+    if dnd is not None:
+        try:
+            move_event = dnd(*draggable_keys, handle=True, handle_icon="⠿",
+                             indicator="ghost", color="#90d3ff", key="eai_dragdrop")
+            if move_event:
+                mapping = {ZONE_KEYS[zone]: st.session_state.board[zone] for zone in ACTIVE_ZONES
+                           if ZONE_KEYS[zone] in draggable_keys}
+                apply_move(move_event, mapping)
+                for zone in ACTIVE_ZONES:
+                    for item in st.session_state.board[zone]:
+                        item["zone"] = zone
+                st.rerun()
+        except Exception as exc:
+            st.warning(f"El arrastre no está disponible en esta sesión: {exc}. Usa el botón ↔ Mover.")
     else:
-        ids = [task["id"] for task in visible]
-        if st.session_state.get("focus_target") not in ids:
-            st.session_state.focus_target = ids[0]
-        # Se sincroniza antes de crear el widget: evita modificar su estado después de instanciarlo.
-        st.session_state.focus_select = st.session_state.focus_target
-        selected_id = st.selectbox(
-            "Selecciona la tarea que vas a etiquetar",
-            ids,
-            format_func=lambda task_id: f"{ids.index(task_id) + 1}/{len(ids)} · {short(find_task(task_id)['text'])}",
-            key="focus_select",
-            on_change=sync_focus,
-        )
-        item = find_task(selected_id)
-        pos = ids.index(selected_id)
-        st.caption(f"Tarea {pos + 1} de {len(ids)} en esta vista · Los cambios se guardan al editar y la matriz se actualiza en cada cambio.")
+        st.info("Para activar el arrastre instala streamlit-dnd==0.2.0. Mientras tanto puedes usar ↔ Mover.")
 
-        edit_key = f"edit_{selected_id}"
-        zone_key = f"zone_{selected_id}"
-        note_key = f"note_{selected_id}"
-        if edit_key not in st.session_state:
-            st.session_state[edit_key] = item["text"]
-        if zone_key not in st.session_state:
-            st.session_state[zone_key] = item["zone"]
-        if note_key not in st.session_state:
-            st.session_state[note_key] = item["notes"]
+    with st.expander(f"✅ Completadas ({done_count}) · historial", expanded=False):
+        if not done_count:
+            st.caption("Al pulsar ✓ Hecha, la tarea desaparecerá de la matriz y quedará guardada aquí.")
+        for task in st.session_state.board[DONE]:
+            r1, r2 = st.columns([5, 1])
+            r1.write(f"✓ {task['text']}")
+            if r2.button("↩ Restaurar", key=f"quick_restore_{task['id']}", use_container_width=True):
+                restore_task(task["id"])
+                st.rerun()
 
-        st.text_area("Descripción (editable)", key=edit_key, height=100,
-                     on_change=update_field, args=(selected_id, "text", edit_key))
-        st.selectbox("🏷️ Etiqueta / zona", ZONES, key=zone_key,
-                     on_change=update_field, args=(selected_id, "zone", zone_key),
-                     help="Selecciona una de las cinco zonas; también puedes dejarla Sin clasificar.")
-        st.text_input("📝 Nota opcional (¿quién lo hace, cómo o por qué?)", key=note_key,
-                      on_change=update_field, args=(selected_id, "notes", note_key),
-                      placeholder="Ejemplo: Diana lo organiza; revisar resultado el viernes")
-
-        nav1, nav2, nav3 = st.columns([1, 1, 1])
-        if nav1.button("⬅️ Anterior", disabled=pos == 0, use_container_width=True):
-            st.session_state.focus_target = ids[pos - 1]
-            st.rerun()
-        if nav2.button("Siguiente ➡️", disabled=pos == len(ids) - 1, use_container_width=True):
-            st.session_state.focus_target = ids[pos + 1]
-            st.rerun()
-        if nav3.button("🗑️ Quitar tarea", use_container_width=True):
-            st.session_state.tasks = [t for t in st.session_state.tasks if t["id"] != selected_id]
-            st.session_state.pop("focus_target", None)
-            st.rerun()
-
-        with st.expander("🧩 Dividir esta tarea en subtareas", expanded=False):
-            st.caption("Escribe una subtarea por línea. Puedes usar la propuesta como punto de partida y corregirla.")
-            split_key = f"splits_{selected_id}"
-            if split_key not in st.session_state:
-                st.session_state[split_key] = ""
-            suggestion = proposed_subtasks(item["text"])
-            if st.button("✨ Proponer subtareas desde una enumeración", key=f"suggest_{selected_id}"):
-                if suggestion:
-                    st.session_state[split_key] = "\n".join(suggestion)
-                    st.rerun()
-                else:
-                    st.info("No encontré una enumeración clara. Escríbelas manualmente, una por línea.")
-            st.text_area("Subtareas", key=split_key, height=130,
-                         placeholder="Primera subtarea\nSegunda subtarea\nTercera subtarea")
-            if st.button("Aplicar desglose", key=f"apply_{selected_id}"):
-                parts = extract_tasks(st.session_state[split_key])
-                if len(parts) < 2:
-                    st.warning("Escribe al menos dos subtareas, una por línea.")
-                else:
-                    index = next(i for i, t in enumerate(st.session_state.tasks) if t["id"] == selected_id)
-                    replacements = [new_task(txt, zone=item["zone"], notes=item["notes"]) for txt in parts]
-                    st.session_state.tasks[index:index + 1] = replacements
-                    st.session_state.focus_target = replacements[0]["id"]
-                    st.toast(f"Tarea desglosada en {len(replacements)} subtareas editables.")
-                    st.rerun()
-
-    with st.expander("➕ Agregar una tarea manualmente"):
-        with st.form("manual_add", clear_on_submit=True):
-            add_text = st.text_input("Nueva tarea")
-            add_zone = st.selectbox("Zona inicial", ZONES)
-            add_note = st.text_input("Nota (opcional)")
-            if st.form_submit_button("Agregar a la lista", type="primary"):
-                if add_text.strip():
-                    new = new_task(add_text, zone=add_zone, notes=add_note)
-                    st.session_state.tasks.append(new)
-                    st.session_state.focus_target = new["id"]
-                    st.rerun()
-                else:
-                    st.warning("Escribe una tarea.")
-
-    with st.expander("📋 Ver lista completa en tabla"):
-        st.dataframe(
-            [{"#": i + 1, "Tarea": t["text"], "Zona": t["zone"], "Nota": t["notes"]}
-             for i, t in enumerate(st.session_state.tasks)],
-            hide_index=True,
-            use_container_width=True,
-        )
-
-st.divider()
-
-# --------- Paso 3 ---------
-st.subheader("3 · Matriz de cinco zonas en tiempo real")
-st.caption("Las tareas etiquetadas aparecen en su zona. Si hay muchas, puedes desplazarte dentro de cada cuadro sin perder la vista de los cinco.")
-st.html(matrix_markup(st.session_state.tasks))
-pending = [task for task in st.session_state.tasks if task["zone"] == "Sin clasificar"]
-if pending:
-    st.info(f"Quedan **{len(pending)} tareas sin clasificar**. No se muestran dentro de la matriz hasta que les asignes una zona.")
-else:
-    st.caption("✅ Todas las tareas actuales están clasificadas." if total else "Agrega tareas para llenar la matriz.")
+st.caption("Los mini tags son notas cortas; no mueven tareas. La zona decide dónde aparece cada tarjeta. "
+           "Los datos se guardan durante la sesión; usa el JSON de la barra lateral para conservarlos.")
